@@ -113,7 +113,7 @@ function homeView() {
     } else {
       body = `<div class="card flash" style="cursor:default">${esc(q)}
         <div class="ans">${esc(a)}</div>
-        <small>${session.result === true ? '✓ richtig' : session.result === false ? '✗ falsch' : ''}</small></div>${gradeButtons()}`;
+        ${feedback(session.result)}</div>${gradeButtons()}`;
     }
   } else {
     body = `<div class="card flash" onclick="reveal()">${esc(q)}
@@ -231,16 +231,59 @@ function statsView() {
 // --- Aktionen ---
 function setMode(m) { state.mode = m; save(); session.revealed = false; session.result = null; render(); }
 function reveal() { session.revealed = true; render(); }
-const norm = (s) => s.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9äöüß ]/g, '').replace(/\s+/g, ' ').trim();
+// --- Antwort prüfen (Tippen-Modus) ---
+// Stufen: ok (exakt) > accent (Akzent/Umlaut fehlt) > article (Artikel fehlt) > close (kleiner Tippfehler) > wrong
+const strictForm = (s) => s.toLowerCase().replace(/[’`´]/g, "'").replace(/[^\p{L}\p{N}' ]/gu, '').replace(/\s+/g, ' ').trim();
+const looseForm = (s) => strictForm(s).normalize('NFD').replace(/[̀-ͯ]/g, '');
+const noArticle = (s) => s.replace(/^(il|lo|la|i|gli|le|un|uno|una|der|die|das|ein|eine)\s+/, '').replace(/^(l|un|dell|all)'/, '');
+const RANK = { ok: 4, accent: 3, article: 2, close: 1, wrong: 0 };
+function compareAnswer(given, option) {
+  const g = strictForm(given), t = strictForm(option);
+  if (!g) return 'wrong';
+  if (g === t) return 'ok';
+  const gl = looseForm(given), tl = looseForm(option);
+  if (gl === tl) return 'accent';
+  const ga = noArticle(gl), ta = noArticle(tl);
+  if (ga === ta) return 'article';
+  const limit = ta.length >= 8 ? 2 : ta.length >= 4 ? 1 : 0;
+  return distance(ga, ta) <= limit ? 'close' : 'wrong';
+}
+// Zielwort mit hervorgehobenen Buchstaben, die in deiner Eingabe fehlten oder falsch waren
+function highlightDiff(given, target) {
+  const g = [...strictForm(given)], t = [...target];
+  const tl = t.map((ch) => ch.toLowerCase());
+  const d = Array.from({ length: g.length + 1 }, (_, i) => [i, ...Array(t.length).fill(0)]);
+  for (let j = 1; j <= t.length; j++) d[0][j] = j;
+  for (let i = 1; i <= g.length; i++) for (let j = 1; j <= t.length; j++)
+    d[i][j] = Math.min(d[i-1][j] + 1, d[i][j-1] + 1, d[i-1][j-1] + (g[i-1] === tl[j-1] ? 0 : 1));
+  const bad = new Set();
+  let i = g.length, j = t.length;
+  while (j > 0) {
+    if (i > 0 && d[i][j] === d[i-1][j-1] + (g[i-1] === tl[j-1] ? 0 : 1)) { if (g[i-1] !== tl[j-1]) bad.add(j - 1); i--; j--; }
+    else if (i > 0 && d[i][j] === d[i-1][j] + 1) i--;
+    else { bad.add(j - 1); j--; }
+  }
+  return t.map((ch, k) => (bad.has(k) ? `<b style="color:var(--bad)">${esc(ch)}</b>` : esc(ch))).join('');
+}
 function check() {
   const c = session.queue[0];
   const toIt = c.reps >= 2;
-  const given = norm($('#ans').value);
-  // mehrere Lösungen erlaubt ("hallo / tschüss", "(Bitte)")
-  const options = (toIt ? c.it : c.de).split('/').map((s) => norm(s.replace(/\(.*?\)/g, '')));
-  session.result = !!given && options.includes(given);
+  const given = $('#ans').value;
+  // mehrere Lösungen erlaubt ("hallo / tschüss"); Klammerzusätze zählen nicht
+  const options = (toIt ? c.it : c.de).split('/').map((x) => x.replace(/\(.*?\)/g, '').trim()).filter(Boolean);
+  let best = { status: 'wrong', target: options[0] };
+  for (const o of options) { const st = compareAnswer(given, o); if (RANK[st] > RANK[best.status]) best = { status: st, target: o }; }
+  session.result = { ...best, given: given.trim() };
   session.revealed = true;
   render();
+}
+function feedback(r) {
+  if (!r) return '';
+  const msg = { ok: '✓ richtig', accent: '✓ richtig – achte auf Akzente und Umlaute', article: 'Fast richtig – es fehlt der Artikel',
+    close: 'Fast richtig – achte auf die Schreibweise', wrong: '✗ falsch' }[r.status];
+  const detail = r.status !== 'ok' && r.given
+    ? `<div style="font:15px -apple-system,system-ui,sans-serif;margin-top:10px;color:var(--mut)">Du: ${esc(r.given)}<br>Richtig: <span style="color:var(--tx);font-family:var(--serif);font-size:18px">${r.status === 'wrong' ? esc(r.target) : highlightDiff(r.given, r.target)}</span></div>` : '';
+  return `<small style="color:${r.status === 'wrong' ? 'var(--bad)' : 'var(--sage)'}">${msg}</small>${detail}`;
 }
 function markStreak() {
   const t = today(), st = state.streak;
