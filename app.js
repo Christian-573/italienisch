@@ -32,7 +32,7 @@ function nextPack() { return PACKS.find((p) => !state.unlocked.includes(p.id)); 
 function unlockPack(p) {
   let t = Date.now();
   state.unlocked.push(p.id);
-  for (const [it, de] of p.words) state.cards.push(newCard(it, de, t++, p.id));
+  for (const [it, de] of p.words) if (!state.cards.some((c) => wordKey(c.it) === wordKey(it))) state.cards.push(newCard(it, de, t++, p.id));
   session = null; save();
 }
 function autoUnlock() {
@@ -63,7 +63,7 @@ function buildQueue() {
   const doneNew = state.reviewed[today()] || 0;
   const due = state.cards.filter((c) => c.seen && c.due <= now).sort((a, b) => a.due - b.due);
   // Eigene Wörter haben Vorrang vor Paketwörtern
-  const isOwn = (c) => (c.pack === 'own' ? 0 : 1);
+  const isOwn = (c) => (c.pack === 'own' || c.priority ? 0 : 1);
   const fresh = state.cards.filter((c) => !c.seen).sort((a, b) => isOwn(a) - isOwn(b))
     .slice(0, Math.max(0, state.newPerDay + extraNew() - doneNew));
   return [...due, ...fresh];
@@ -150,11 +150,19 @@ function wordsView() {
     <div class="card"><b>Neues Wort</b>
       <input id="nit" placeholder="Italienisch" autocapitalize="off" autocorrect="off" spellcheck="false" oninput="liveCheck()">
       <div id="status" class="mut" style="margin-top:6px"></div>
-      <input id="nde" placeholder="Deutsch">
+      <input id="nde" placeholder="Deutsch" oninput="$('#dup').innerHTML=''">
+      <div id="dup" style="margin-top:8px"></div>
       <button class="pri" onclick="addWord()">Prüfen &amp; hinzufügen</button></div>
     <div class="card"><b>Import</b><p class="mut">Eine Zeile pro Wort: <code>italienisch;deutsch</code> (oder Tab / Komma)</p>
       <textarea id="imp" rows="4" placeholder="il gatto;die Katze"></textarea>
       <button class="sec" onclick="importWords()">Importieren</button></div>
+    <div class="card"><b>Teilen und Backup</b>
+      <p class="mut">${state.cards.filter((c) => c.pack === 'own').length} eigene Wörter. Teilen enthält nur Italienisch und Deutsch, das Backup alles (Fortschritt, Statistik).</p>
+      <button onclick="shareWords()">Eigene Wörter teilen</button>
+      <button class="sec" onclick="copyWords()">Eigene Wörter kopieren</button>
+      <button class="sec" onclick="exportBackup()">Backup speichern</button>
+      <button class="sec" onclick="$('#restore').click()">Backup wiederherstellen</button>
+      <input id="restore" type="file" accept=".json,application/json" style="display:none" onchange="restoreBackup(this.files[0])"></div>
     <div class="card">${list.map((c) => `<div class="word"><span>${esc(c.it)}</span><span>${esc(c.de)}
       <a href="#" onclick="delWord(${c.id});return false" style="margin-left:8px">✕</a></span></div>`).join('')}</div>`;
 }
@@ -385,24 +393,109 @@ function fixWord(wrong, right) {
   el.value = el.value.replace(new RegExp(wrong.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i'), right);
   liveCheck();
 }
+// --- Doppelte erkennen, Teilen, Backup ---
+const wordKey = (it) => noArticle(looseForm(it));
+// Existiert das Wort schon? -> {card} (in deiner Liste) oder {pack, it, de} (in einem noch gesperrten Paket)
+function findExisting(it) {
+  const k = wordKey(it);
+  const card = state.cards.find((c) => wordKey(c.it) === k);
+  if (card) return { card };
+  for (const p of PACKS) {
+    if (state.unlocked.includes(p.id)) continue;
+    const w = p.words.find(([i]) => wordKey(i) === k);
+    if (w) return { pack: p, it: w[0], de: w[1] };
+  }
+  return null;
+}
+let pendingDup = null;
+function showDuplicate(ex, de) {
+  const el = $('#dup');
+  const have = ex.card ? ex.card : { it: ex.it, de: ex.de };
+  const diff = wordKey(have.de) !== wordKey(de) ? ` (bei dir: ${esc(have.de)})` : '';
+  if (ex.card && ex.card.seen) {
+    el.innerHTML = `<span class="mut">„${esc(have.it)}" = ${esc(have.de)} ist schon in deinem Übungswortschatz.${diff} Nichts geändert.</span>`;
+    return;
+  }
+  pendingDup = ex;
+  el.innerHTML = `<div class="mut">„${esc(have.it)}" = ${esc(have.de)} gibt es schon${ex.pack ? ' (' + esc(ex.pack.name) + ', noch gesperrt)' : ' (noch nicht gelernt)'}.
+    In den aktuellen Übungswortschatz übernehmen?</div>
+    <div class="row" style="margin-top:8px"><button class="pri" onclick="promoteDup()">Ja</button><button class="sec" onclick="pendingDup=null;$('#dup').innerHTML=''">Nein</button></div>`;
+}
+function promoteDup() {
+  const ex = pendingDup; pendingDup = null;
+  if (!ex) return;
+  let c = ex.card;
+  if (!c) { c = newCard(ex.it, ex.de, Date.now(), ex.pack.id); state.cards.push(c); }
+  c.priority = true; session = null; save(); render();
+  $('#dup').innerHTML = '<span class="mut">Übernommen – kommt als Nächstes dran.</span>';
+}
 async function addWord() {
   const it = $('#nit').value.trim(), de = $('#nde').value.trim();
   if (!it || !de) return;
+  const ex = findExisting(it);
+  if (ex) { showDuplicate(ex, de); return; }
   const res = await spellcheck(it, false);
   if (res.bad && res.bad.length &&
       !confirm(`Nicht gefunden: ${res.bad.map((b) => b.word).join(', ')}\nTrotzdem speichern?`)) return;
   state.cards.push(newCard(it, de, Date.now(), 'own')); session = null; save(); render();
 }
 async function importWords() {
-  const rows = $('#imp').value.split('\n').map((l) => l.split(/;|\t|,/).map((s) => s.trim())).filter((p) => p.length >= 2 && p[0] && p[1]);
+  const rows = $('#imp').value.split('\n').map((l) => l.split(/;|\t|,/).map((x) => x.trim())).filter((p) => p.length >= 2 && p[0] && p[1]);
   if (!rows.length) return;
-  const res = await spellcheck(rows.map((r) => r[0]).join(' '), false);
+  const fresh = [], skipped = [], other = [];
+  for (const [it, de] of rows) {
+    const ex = findExisting(it) || (fresh.find((r) => wordKey(r[0]) === wordKey(it)) && { card: { it, de } });
+    if (!ex) { fresh.push([it, de]); continue; }
+    skipped.push(it);
+    const have = ex.card || ex;
+    if (wordKey(have.de) !== wordKey(de)) other.push(`${it}: bei dir „${have.de}", neu „${de}"`);
+  }
+  if (!fresh.length) { alert(`Nichts importiert: alle ${skipped.length} Wörter gibt es schon.` + (other.length ? '\n\nAndere Übersetzung:\n' + other.join('\n') : '')); return; }
+  const res = await spellcheck(fresh.map((r) => r[0]).join(' '), false);
   if (res.bad && res.bad.length &&
-      !confirm(`Nicht gefunden: ${res.bad.map((b) => b.word).join(', ')}\nTrotzdem alle importieren?`)) return;
+      !confirm(`Nicht gefunden: ${res.bad.map((b) => b.word).join(', ')}\nTrotzdem importieren?`)) return;
   let t = Date.now();
-  rows.forEach((p) => state.cards.push(newCard(p[0], p[1], t++, 'own')));
+  fresh.forEach(([it, de]) => state.cards.push(newCard(it, de, t++, 'own')));
   session = null; save(); render();
-  alert(rows.length + ' Wörter importiert.');
+  alert(`${fresh.length} neu hinzugefügt, ${skipped.length} übersprungen (schon vorhanden).` +
+    (other.length ? '\n\nAndere Übersetzung, nichts überschrieben:\n' + other.join('\n') : ''));
+}
+const ownWordsText = () => state.cards.filter((c) => c.pack === 'own').map((c) => `${c.it};${c.de}`).join('\n');
+async function copyWords() {
+  const text = ownWordsText();
+  if (!text) { alert('Du hast noch keine eigenen Wörter.'); return; }
+  try { await navigator.clipboard.writeText(text); alert('Kopiert. Füge die Liste im Importfeld ein.'); }
+  catch (e) { prompt('Zum Kopieren markieren:', text); }
+}
+async function shareWords() {
+  const text = ownWordsText();
+  if (!text) { alert('Du hast noch keine eigenen Wörter.'); return; }
+  if (navigator.share) { try { await navigator.share({ title: 'Italienisch-Wörter', text }); return; } catch (e) { if (e.name === 'AbortError') return; } }
+  copyWords();
+}
+async function exportBackup() {
+  const file = new File([JSON.stringify(state)], `italiano-backup-${today()}.json`, { type: 'application/json' });
+  if (navigator.canShare && navigator.canShare({ files: [file] })) {
+    try { await navigator.share({ files: [file], title: 'Italiano-Backup' }); return; } catch (e) { if (e.name === 'AbortError') return; }
+  }
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(file); a.download = file.name; a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+async function restoreBackup(file) {
+  if (!file) return;
+  try {
+    const data = JSON.parse(await file.text());
+    if (!Array.isArray(data.cards) || !data.cards.every((c) => c && c.it && c.de)) throw new Error('format');
+    if (!confirm(`Backup mit ${data.cards.length} Wörtern wiederherstellen? Dein aktueller Stand wird ersetzt.`)) return;
+    state = data;
+    if (!state.unlocked) state.unlocked = ['a1-basis'];
+    if (!state.log) state.log = {};
+    if (!state.since) state.since = today();
+    if (!state.reviewed) state.reviewed = {};
+    session = null; save(); render();
+    alert('Backup wiederhergestellt.');
+  } catch (e) { alert('Diese Datei ist kein gültiges Backup.'); }
 }
 function delWord(id) { state.cards = state.cards.filter((c) => c.id !== id); session = null; save(); render(); }
 function resetAll() { if (confirm('Wirklich alle Fortschritte und eigenen Wörter löschen?')) { localStorage.removeItem(KEY); state = load(); session = null; render(); } }
