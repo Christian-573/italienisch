@@ -56,6 +56,8 @@ function grade(card, g) {
   card.due = now + card.interval * DAY;
 }
 
+// Zusätzliche neue Wörter, die heute über das Tageslimit hinaus freigegeben wurden
+function extraNew() { return state.extra && state.extra.day === today() ? state.extra.n : 0; }
 function buildQueue() {
   const now = Date.now();
   const doneNew = state.reviewed[today()] || 0;
@@ -63,12 +65,18 @@ function buildQueue() {
   // Eigene Wörter haben Vorrang vor Paketwörtern
   const isOwn = (c) => (c.pack === 'own' ? 0 : 1);
   const fresh = state.cards.filter((c) => !c.seen).sort((a, b) => isOwn(a) - isOwn(b))
-    .slice(0, Math.max(0, state.newPerDay - doneNew));
+    .slice(0, Math.max(0, state.newPerDay + extraNew() - doneNew));
   return [...due, ...fresh];
 }
 
-function startSession() {
-  session = { queue: buildQueue(), revealed: false, result: null, done: 0 };
+// mode: 'more' = 10 weitere neue Wörter, 'practice' = Übungsrunde (ändert den Lernplan nicht)
+function startSession(mode) {
+  if (mode === 'more') state.extra = { day: today(), n: extraNew() + 10 };
+  if (mode === 'practice') {
+    const queue = state.cards.filter((c) => c.seen).sort((a, b) => a.due - b.due).slice(0, 20);
+    session = { queue, revealed: false, result: null, done: 0, practice: true };
+  } else session = { queue: buildQueue(), revealed: false, result: null, done: 0 };
+  if (mode === 'more') save();
   render();
 }
 
@@ -87,8 +95,10 @@ function homeView() {
   const c = session.queue[0];
   const left = session.queue.length;
   if (!c) {
-    return `${topBar(0)}<div class="card flash" style="cursor:default;font-size:30px">Für heute ist alles gelernt<small>${session.done} Karten in dieser Runde</small></div>
-      <button class="sec" onclick="startSession()">Nochmal prüfen</button>`;
+    return `${topBar(0)}<div class="card flash" style="cursor:default;font-size:30px">${session.practice ? 'Übungsrunde beendet' : 'Für heute ist alles gelernt'}<small>${session.done} Karten in dieser Runde</small></div>
+      ${state.cards.some((c) => !c.seen) ? `<button class="pri" onclick="startSession('more')">10 weitere neue Wörter</button>` : ''}
+      ${state.cards.some((c) => c.seen) ? `<button class="sec" onclick="startSession('practice')">Gelernte Wörter üben</button>` : ''}
+      <p class="mut" style="text-align:center;margin-top:12px">Übungsrunden ändern deinen Lernplan nicht.</p>`;
   }
   // Richtung: neue/unsichere Karten IT -> DE, sonst DE -> IT (aktiver Abruf)
   const toIt = c.reps >= 2;
@@ -240,6 +250,12 @@ function markStreak() {
 }
 function answer(g) {
   const c = session.queue.shift();
+  if (session.practice) { // Übungsrunde: nur abfragen, nichts speichern
+    if (g === 0) session.queue.push(c); else session.done++;
+    session.revealed = false; session.result = null;
+    render();
+    return;
+  }
   const wasNew = !c.seen;
   grade(c, g);
   markStreak();
