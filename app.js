@@ -100,8 +100,7 @@ function homeView() {
       ${state.cards.some((c) => c.seen) ? `<button class="sec" onclick="startSession('practice')">Gelernte Wörter üben</button>` : ''}
       <p class="mut" style="text-align:center;margin-top:12px">Übungsrunden ändern deinen Lernplan nicht.</p>`;
   }
-  // Richtung: neue/unsichere Karten IT -> DE, sonst DE -> IT (aktiver Abruf)
-  const toIt = c.reps >= 2;
+  const toIt = toItalian(c);
   const q = toIt ? c.de : c.it, a = toIt ? c.it : c.de;
   let body;
   if (state.mode === 'type') {
@@ -120,8 +119,19 @@ function homeView() {
       ${session.revealed ? `<div class="ans">${esc(a)}</div>` : `<small>Tippen zum Umdrehen</small>`}</div>
       ${session.revealed ? gradeButtons() : ''}`;
   }
-  return `${topBar(left)}${body}`;
+  return `${topBar(left)}${directionSwitch()}${body}`;
 }
+// Abfragerichtung: 'it-de', 'de-it' oder 'mixed' (neue/unsichere Karten IT -> DE, ab 2 richtigen Wiederholungen DE -> IT)
+function toItalian(c) {
+  const d = state.direction || 'mixed';
+  return d === 'de-it' ? true : d === 'it-de' ? false : c.reps >= 2;
+}
+function directionSwitch() {
+  const d = state.direction || 'mixed';
+  return `<div class="row" style="margin-bottom:12px">${[['it-de', 'IT → DE'], ['de-it', 'DE → IT'], ['mixed', 'Gemischt']].map(([k, l]) =>
+    `<button class="${d === k ? 'on' : 'sec'}" onclick="setDirection('${k}')">${l}</button>`).join('')}</div>`;
+}
+function setDirection(d) { state.direction = d; save(); session.revealed = false; session.result = null; render(); }
 // Kopfzeile: übrige Karten, Modus, Serie + Fortschrittsbalken (erledigt / gesamt in dieser Runde)
 function topBar(left) {
   const total = session.done + left;
@@ -275,7 +285,7 @@ function highlightDiff(given, target) {
 }
 function check() {
   const c = session.queue[0];
-  const toIt = c.reps >= 2;
+  const toIt = toItalian(c);
   const given = $('#ans').value;
   // mehrere Lösungen erlaubt ("hallo / tschüss"); Klammerzusätze zählen nicht
   const options = (toIt ? c.it : c.de).split('/').map((x) => x.replace(/\(.*?\)/g, '').trim()).filter(Boolean);
