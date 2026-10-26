@@ -251,7 +251,8 @@ function setMode(m) { state.mode = m; save(); session.revealed = false; session.
 function reveal() { session.revealed = true; render(); }
 // --- Antwort prüfen (Tippen-Modus) ---
 // Stufen: ok (exakt) > accent (Akzent/Umlaut fehlt) > article (Artikel fehlt) > close (kleiner Tippfehler) > wrong
-const strictForm = (s) => s.toLowerCase().replace(/[’`´]/g, "'").replace(/[^\p{L}\p{N}' ]/gu, '').replace(/\s+/g, ' ').trim();
+// ß und ss gelten als gleich (viele Handy-Tastaturen haben kein ß)
+const strictForm = (s) => s.toLowerCase().replace(/ß/g, 'ss').replace(/[’`´]/g, "'").replace(/[^\p{L}\p{N}' ]/gu, '').replace(/\s+/g, ' ').trim();
 const looseForm = (s) => strictForm(s).normalize('NFD').replace(/[̀-ͯ]/g, '');
 const noArticle = (s) => s.replace(/^(il|lo|la|i|gli|le|un|uno|una|der|die|das|ein|eine)\s+/, '').replace(/^(l|un|dell|all)'/, '');
 const RANK = { ok: 4, accent: 3, article: 2, close: 1, wrong: 0 };
@@ -269,17 +270,19 @@ function compareAnswer(given, option) {
 // Zielwort mit hervorgehobenen Buchstaben, die in deiner Eingabe fehlten oder falsch waren
 function highlightDiff(given, target) {
   const g = [...strictForm(given)], t = [...target];
-  const tl = t.map((ch) => ch.toLowerCase());
-  const d = Array.from({ length: g.length + 1 }, (_, i) => [i, ...Array(t.length).fill(0)]);
-  for (let j = 1; j <= t.length; j++) d[0][j] = j;
-  for (let i = 1; i <= g.length; i++) for (let j = 1; j <= t.length; j++)
+  // ß wird für den Vergleich zu "ss"; owner[] verweist zurück auf das Zeichen im Zielwort
+  const tl = [], owner = [];
+  t.forEach((ch, k) => { for (const x of (ch.toLowerCase() === 'ß' ? 'ss' : ch.toLowerCase())) { tl.push(x); owner.push(k); } });
+  const d = Array.from({ length: g.length + 1 }, (_, i) => [i, ...Array(tl.length).fill(0)]);
+  for (let j = 1; j <= tl.length; j++) d[0][j] = j;
+  for (let i = 1; i <= g.length; i++) for (let j = 1; j <= tl.length; j++)
     d[i][j] = Math.min(d[i-1][j] + 1, d[i][j-1] + 1, d[i-1][j-1] + (g[i-1] === tl[j-1] ? 0 : 1));
   const bad = new Set();
-  let i = g.length, j = t.length;
+  let i = g.length, j = tl.length;
   while (j > 0) {
-    if (i > 0 && d[i][j] === d[i-1][j-1] + (g[i-1] === tl[j-1] ? 0 : 1)) { if (g[i-1] !== tl[j-1]) bad.add(j - 1); i--; j--; }
+    if (i > 0 && d[i][j] === d[i-1][j-1] + (g[i-1] === tl[j-1] ? 0 : 1)) { if (g[i-1] !== tl[j-1]) bad.add(owner[j - 1]); i--; j--; }
     else if (i > 0 && d[i][j] === d[i-1][j] + 1) i--;
-    else { bad.add(j - 1); j--; }
+    else { bad.add(owner[j - 1]); j--; }
   }
   return t.map((ch, k) => (bad.has(k) ? `<b style="color:var(--bad)">${esc(ch)}</b>` : esc(ch))).join('');
 }
