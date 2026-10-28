@@ -82,12 +82,13 @@ function startSession(mode) {
 
 // --- Views ---
 function render() {
+  document.body.dataset.view = view;
   document.querySelectorAll('#tabs button').forEach((b) => b.classList.toggle('on', b.dataset.view === view));
   const app = $('#app');
   if (view === 'home') app.innerHTML = homeView();
   else if (view === 'words') app.innerHTML = wordsView();
   else app.innerHTML = statsView();
-  if (view === 'home') { const i = $('#ans'); if (i && !session.revealed) i.focus(); }
+  if (view === 'home') { const i = $('#ans'); if (i && !session.revealed) i.focus({ preventScroll: true }); }
 }
 
 function homeView() {
@@ -106,7 +107,7 @@ function homeView() {
   if (state.mode === 'type') {
     if (!session.revealed) {
       body = `<div class="card flash" style="cursor:default">${esc(q)}<small>${toIt ? 'Auf Italienisch?' : 'Auf Deutsch?'}</small></div>
-        <input id="ans" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="Antwort eintippen"
+        <input id="ans" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="Antwort eintippen" enterkeyhint="go"
           onkeydown="if(event.key==='Enter')check()">
         <button class="pri" onclick="check()">Prüfen</button><button class="sec" onclick="reveal()">Weiß ich nicht</button>`;
     } else {
@@ -128,7 +129,7 @@ function toItalian(c) {
 }
 function directionSwitch() {
   const d = state.direction || 'mixed';
-  return `<div class="row" style="margin-bottom:12px">${[['it-de', 'IT → DE'], ['de-it', 'DE → IT'], ['mixed', 'Gemischt']].map(([k, l]) =>
+  return `<div class="row dirsw" style="margin-bottom:12px">${[['it-de', 'IT → DE'], ['de-it', 'DE → IT'], ['mixed', 'Gemischt']].map(([k, l]) =>
     `<button class="${d === k ? 'on' : 'sec'}" onclick="setDirection('${k}')">${l}</button>`).join('')}</div>`;
 }
 function setDirection(d) { state.direction = d; save(); session.revealed = false; session.result = null; render(); }
@@ -514,6 +515,21 @@ async function restoreBackup(file) {
 function delWord(id) { state.cards = state.cards.filter((c) => c.id !== id); session = null; save(); render(); }
 function resetAll() { if (confirm('Wirklich alle Fortschritte und eigenen Wörter löschen?')) { localStorage.removeItem(KEY); state = load(); session = null; render(); } }
 
+// Tastatur offen? Dann Tab-Leiste ausblenden und die Lernansicht auf den sichtbaren Bereich begrenzen,
+// damit iOS die Seite nicht nach oben schiebt. (innerHTML-Höhe bleibt auf iOS gleich, visualViewport schrumpft.)
+if (window.visualViewport) {
+  const vv = window.visualViewport;
+  const sync = () => {
+    const open = vv.scale < 1.1 && vv.height < window.innerHeight - 100; // nicht bei Pinch-Zoom
+    document.body.classList.toggle('kb', open);
+    const root = document.documentElement.style;
+    root.setProperty('--vvh', vv.height + 'px');
+    root.setProperty('--vvtop', vv.offsetTop + 'px');
+  };
+  vv.addEventListener('resize', sync);
+  vv.addEventListener('scroll', sync);
+  sync();
+}
 document.querySelectorAll('#tabs button').forEach((b) => b.onclick = () => { view = b.dataset.view; if (view === 'home') session = null; render(); });
 render();
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js');

@@ -38,3 +38,13 @@ input.ok{border-color:var(--sage)}input.bad{border-color:var(--bad)}
 .mut{color:var(--mut);font-size:14px}
 .big{font:400 36px var(--serif)}
 code{font-size:13px;color:var(--sage)}
+
+/* Tastatur offen: weniger Platz verbrauchen, Tabs weg, Seite nicht mitschieben */
+body.kb #tabs{display:none}
+body.kb{padding-bottom:0}
+body.kb .dirsw{display:none}
+body.kb .flash{min-height:100px;font-size:30px}
+body.kb .flash small{margin-top:8px}
+body.kb .bar{margin-bottom:8px}
+body.kb main{padding-top:6px}
+body.kb[data-view=home]{position:fixed;left:0;right:0;top:0;height:var(--vvh);overflow:hidden;transform:translateY(var(--vvtop))}
