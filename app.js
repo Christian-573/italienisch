@@ -121,10 +121,10 @@ function homeView() {
   }
   return `${topBar(left)}${directionSwitch()}${body}`;
 }
-// Abfragerichtung: 'it-de', 'de-it' oder 'mixed' (neue/unsichere Karten IT -> DE, ab 2 richtigen Wiederholungen DE -> IT)
+// Abfragerichtung: 'it-de', 'de-it' oder 'mixed' (abwechselnd: eine Karte IT -> DE, die nächste DE -> IT, usw.)
 function toItalian(c) {
   const d = state.direction || 'mixed';
-  return d === 'de-it' ? true : d === 'it-de' ? false : c.reps >= 2;
+  return d === 'de-it' ? true : d === 'it-de' ? false : (state.alt || 0) % 2 === 1;
 }
 function directionSwitch() {
   const d = state.direction || 'mixed';
@@ -314,6 +314,7 @@ function markStreak() {
 }
 function answer(g) {
   const c = session.queue.shift();
+  state.alt = (state.alt || 0) + 1; // Gemischt: nächste Karte in der anderen Richtung
   if (session.practice) { // Übungsrunde: nur abfragen, nichts speichern
     if (g === 0) session.queue.push(c); else session.done++;
     session.revealed = false; session.result = null;
